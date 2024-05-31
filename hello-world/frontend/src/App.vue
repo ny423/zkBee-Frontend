@@ -74,13 +74,16 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { Contract, BrowserProvider, Provider, utils } from 'zksync-ethers';
+
 // TODO: import ethers and zksync-ethers
 
 const GREETER_CONTRACT_ADDRESS = ""; // TODO: insert the Greeter contract address here
 import GREETER_CONTRACT_ABI from "./abi.json"; // TODO: Complete and import the ABI
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
-import allowedTokens from "./eth.json"; // change to "./erc20.json" to use ERC20 tokens
+import allowedTokens from "./erc20.json";
+import { ethers } from "ethers";
 
 // reactive references
 const correctNetwork = ref(false);
@@ -121,37 +124,100 @@ onMounted(async () => {
 
 // METHODS TO BE IMPLEMENTED
 const initializeProviderAndSigner = async () => {
-  // TODO: initialize provider and signer based on `window.ethereum`
+  provider = new Provider("https://sepolia.era.zksync.dev");
+  // Note that we still need to get the Metamask signer
+  signer = await new BrowserProvider(window.ethereum).getSigner();
+  contract = new Contract(GREETER_CONTRACT_ADDRESS, GREETER_CONTRACT_ABI, signer);
 };
 
+
 const getGreeting = async () => {
-  // TODO: return the current greeting
-  return "";
+  // Smart contract calls work the same way as in `ethers`
+  return await contract.greet();
 };
 
 const getFee = async () => {
-  // TODO: return formatted fee
-  return "";
+  // Getting the amount of gas (gas) needed for one transaction
+  const feeInGas = await contract.setGreeting.estimateGas(newGreeting.value);
+  // Getting the gas price per one erg. For now, it is the same for all tokens.
+  const gasPriceInUnits = await provider.getGasPrice();
+
+  // To display the number of tokens in the human-readable format, we need to format them,
+  // e.g. if feeInGas*gasPriceInUnits returns 500000000000000000 wei of ETH, we want to display 0.5 ETH the user
+  return ethers.formatUnits(feeInGas * gasPriceInUnits, selectedToken.value.decimals);
 };
 
+
 const getBalance = async () => {
-  // TODO: Return formatted balance
-  return "";
+  // Getting the balance for the signer in the selected token
+  const balanceInUnits = await signer.getBalance(selectedToken.value.l2Address);
+  // To display the number of tokens in the human-readable format, we need to format them,
+  // e.g. if balanceInUnits returns 500000000000000000 wei of ETH, we want to display 0.5 ETH the user
+  return ethers.formatUnits(balanceInUnits, selectedToken.value.decimals);
 };
+
 const getOverrides = async () => {
-  if (selectedToken.value?.l2Address != ETH_ADDRESS) {
-    // TODO: Return data for the paymaster
+  if (selectedToken.value.l2Address != ETH_ADDRESS) {
+    const testnetPaymaster = await provider.getTestnetPaymasterAddress();
+
+    const gasPrice = await provider.getGasPrice();
+
+    // define paymaster parameters for gas estimation
+    const paramsForFeeEstimation = utils.getPaymasterParams(testnetPaymaster, {
+      type: "ApprovalBased",
+      minimalAllowance: BigInt("1"),
+      token: selectedToken.value.l2Address,
+      innerInput: new Uint8Array(),
+    });
+
+    // estimate gasLimit via paymaster
+    const gasLimit = await contract.setGreeting.estimateGas(newGreeting.value, {
+      customData: {
+        gasPerPubdata: utils.DEFAULT_GAS_PER_PUBDATA_LIMIT,
+        paymasterParams: paramsForFeeEstimation,
+      },
+    });
+
+    // fee calculated in ETH will be the same in
+    // ERC20 token using the testnet paymaster
+    const fee = gasPrice * gasLimit;
+
+    const paymasterParams = utils.getPaymasterParams(testnetPaymaster, {
+      type: "ApprovalBased",
+      token: selectedToken.value.l2Address,
+      // provide estimated fee as allowance
+      minimalAllowance: fee,
+      // empty bytes as testnet paymaster does not use innerInput
+      innerInput: new Uint8Array(),
+    });
+
+    return {
+      maxFeePerGas: gasPrice,
+      maxPriorityFeePerGas: BigInt(1),
+      gasLimit,
+      customData: {
+        gasPerPubdata: utils.DEFAULT_GAS_PER_PUBDATA_LIMIT,
+        paymasterParams,
+      },
+    };
   }
 
   return {};
 };
+
+
+
+
 const changeGreeting = async () => {
   txStatus.value = 1;
   try {
-    // TODO: Submit the transaction
+    const overrides = await getOverrides();
+    const txHandle = await contract.setGreeting(newGreeting.value, overrides);
+
     txStatus.value = 2;
 
-    // TODO: Wait for transaction compilation
+    // Wait until the transaction is committed
+    await txHandle.wait();
     txStatus.value = 3;
 
     // Update greeting
@@ -172,6 +238,7 @@ const changeGreeting = async () => {
   retrievingBalance.value = false;
   newGreeting.value = "";
 };
+
 
 const updateFee = async () => {
   retrievingFee.value = true;

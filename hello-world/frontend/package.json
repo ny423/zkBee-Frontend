@@ -9,7 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.3.11"
+    "ethers": "6",
+    "vue": "^3.4.27",
+    "zksync-ethers": "^6.7.1"
   },
   "devDependencies": {
     "@metamask/providers": "^14.0.2",
