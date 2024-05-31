@@ -1,19 +1,24 @@
 <template>
   <div id="app" v-if="!mainLoading">
-    <h1>Greeter says: {{ greeting }} 👋</h1>
+    <h1>Welcome to Stake Bee 👋</h1>
     <div class="title">
       This a simple dApp, which can choose fee token and interact with the
-      `Greeter` smart contract.
+      `bETHMinter` smart contract.
       <p>
         The contract is deployed on the zkSync testnet on
         <a
-          :href="`https://sepolia.explorer.zksync.io/address/${GREETER_CONTRACT_ADDRESS}`"
+          :href="`https://sepolia.explorer.zksync.io/address/${MINTER_CONTRACT_ADDRESS}`"
           target="_blank"
-          >{{ GREETER_CONTRACT_ADDRESS }}</a
+        >{{ MINTER_CONTRACT_ADDRESS }}</a
         >
       </p>
     </div>
     <div class="main-box">
+      <div class="balance beth">
+        <p>
+          Staked ETH Balance: <span>{{ currentbETHBalance }} bETH</span>
+        </p>
+      </div>
       <div>
         Select token:
         <select v-model="selectedTokenAddress" @change="changeToken">
@@ -26,7 +31,7 @@
           </option>
         </select>
       </div>
-      <div class="balance" v-if="selectedToken">
+      <div class="balance gas-token" v-if="selectedToken">
         <p>
           Balance: <span v-if="retrievingBalance">Loading...</span>
           <span v-else>{{ currentBalance }} {{ selectedToken.symbol }}</span>
@@ -39,21 +44,21 @@
       </div>
       <div class="greeting-input">
         <input
-          v-model="newGreeting"
+          v-model="stakeValue"
           :disabled="!selectedToken || txStatus != 0"
-          placeholder="Write new greeting here..."
+          placeholder="Input stake value here..."
         />
 
         <button
           class="change-button"
           :disabled="!selectedToken || txStatus != 0 || retrievingFee"
-          @click="changeGreeting"
+          @click="clickSubmit"
         >
-          <span v-if="selectedToken && !txStatus">Change greeting</span>
+          <span v-if="selectedToken && !txStatus">Submit</span>
           <span v-else-if="!selectedToken">Select token to pay fee first</span>
           <span v-else-if="txStatus === 1">Sending tx...</span>
           <span v-else-if="txStatus === 2"
-            >Waiting until tx is committed...</span
+          >Waiting until tx is committed...</span
           >
           <span v-else-if="txStatus === 3">Updating the page...</span>
           <span v-else-if="retrievingFee">Updating the fee...</span>
@@ -63,7 +68,7 @@
   </div>
   <div id="app" v-else>
     <div class="start-screen">
-      <h1>Welcome to Greeter dApp!</h1>
+      <h1>Welcome to Stake Bee dApp!</h1>
       <button v-if="correctNetwork" @click="connectMetamask">
         Connect Metamask
       </button>
@@ -74,27 +79,29 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { Contract, BrowserProvider, Provider, utils } from 'zksync-ethers';
+import { ethers, parseEther } from "ethers";
+import { Contract, BrowserProvider, Provider, utils, Wallet } from "zksync-ethers";
 
-// TODO: import ethers and zksync-ethers
-
-const GREETER_CONTRACT_ADDRESS = ""; // TODO: insert the Greeter contract address here
-import GREETER_CONTRACT_ABI from "./abi.json"; // TODO: Complete and import the ABI
+const MINTER_CONTRACT_ADDRESS = "0x2cABA947FB69fFfE6c4404682CB0512A94D22318";
+import MINTER_CONTRACT_ABI from "./abi.json";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
+const BETH_ADDRESS = "0x8Ca4a1c501A5d319d30a80a2aDf2226fd4f9A6A8";
 import allowedTokens from "./erc20.json";
-import { ethers } from "ethers";
 
 // reactive references
 const correctNetwork = ref(false);
 const tokens = ref(allowedTokens);
-const newGreeting = ref("");
-const greeting = ref("");
+// const newGreeting = ref("");
+// const greeting = ref("");
+const stakeValue = ref("");
 const mainLoading = ref(true);
 const retrievingFee = ref(false);
 const retrievingBalance = ref(false);
 const currentBalance = ref("");
 const currentFee = ref("");
+const retrievingbETHBalance = ref(false);
+const currentbETHBalance = ref("");
 const selectedTokenAddress = ref(null);
 const selectedToken = ref<{
   l2Address: string;
@@ -122,18 +129,12 @@ onMounted(async () => {
   }
 });
 
-// METHODS TO BE IMPLEMENTED
 const initializeProviderAndSigner = async () => {
   provider = new Provider("https://sepolia.era.zksync.dev");
   // Note that we still need to get the Metamask signer
   signer = await new BrowserProvider(window.ethereum).getSigner();
-  contract = new Contract(GREETER_CONTRACT_ADDRESS, GREETER_CONTRACT_ABI, signer);
-};
-
-
-const getGreeting = async () => {
-  // Smart contract calls work the same way as in `ethers`
-  return await contract.greet();
+  contract = new Contract(MINTER_CONTRACT_ADDRESS, MINTER_CONTRACT_ABI, signer);
+  currentbETHBalance.value = await getbETHBalance();
 };
 
 const getFee = async () => {
@@ -156,6 +157,14 @@ const getBalance = async () => {
   return ethers.formatUnits(balanceInUnits, selectedToken.value.decimals);
 };
 
+const getbETHBalance = async () => {
+  // Getting the balance for the signer in the selected token
+  const balanceInUnits = await signer.getBalance(BETH_ADDRESS);
+  // To display the number of tokens in the human-readable format, we need to format them,
+  // e.g. if balanceInUnits returns 500000000000000000 wei of ETH, we want to display 0.5 ETH the user
+  return ethers.formatUnits(balanceInUnits, 18);
+};
+
 const getOverrides = async () => {
   if (selectedToken.value.l2Address != ETH_ADDRESS) {
     const testnetPaymaster = await provider.getTestnetPaymasterAddress();
@@ -171,7 +180,7 @@ const getOverrides = async () => {
     });
 
     // estimate gasLimit via paymaster
-    const gasLimit = await contract.setGreeting.estimateGas(newGreeting.value, {
+    const gasLimit = await contract.submit.estimateGas(stakeValue.value, {
       customData: {
         gasPerPubdata: utils.DEFAULT_GAS_PER_PUBDATA_LIMIT,
         paymasterParams: paramsForFeeEstimation,
@@ -205,14 +214,13 @@ const getOverrides = async () => {
   return {};
 };
 
+/* State Updates */
 
-
-
-const changeGreeting = async () => {
+const clickSubmit = async () => {
   txStatus.value = 1;
   try {
     const overrides = await getOverrides();
-    const txHandle = await contract.setGreeting(newGreeting.value, overrides);
+    const txHandle = await contract.submit(stakeValue.value, overrides);
 
     txStatus.value = 2;
 
@@ -220,111 +228,107 @@ const changeGreeting = async () => {
     await txHandle.wait();
     txStatus.value = 3;
 
-    // Update greeting
-    greeting.value = await getGreeting();
-
     retrievingFee.value = true;
     retrievingBalance.value = true;
     // Update balance and fee
     currentBalance.value = await getBalance();
+    currentbETHBalance.value = await getbETHBalance();
     currentFee.value = await getFee();
   } catch (e) {
     console.error(e);
     alert(e);
   }
+}
 
-  txStatus.value = 0;
-  retrievingFee.value = false;
-  retrievingBalance.value = false;
-  newGreeting.value = "";
-};
-
-
-const updateFee = async () => {
-  retrievingFee.value = true;
-  getFee()
-    .then((fee) => {
-      currentFee.value = fee;
-    })
-    .catch((e) => console.log(e))
-    .finally(() => {
-      retrievingFee.value = false;
-    });
-};
-const updateBalance = async () => {
-  retrievingBalance.value = true;
-  getBalance()
-    .then((balance) => {
-      currentBalance.value = balance;
-    })
-    .catch((e) => console.log(e))
-    .finally(() => {
-      retrievingBalance.value = false;
-    });
-};
-const changeToken = async () => {
-  retrievingFee.value = true;
-  retrievingBalance.value = true;
-
-  const tokenAddress = tokens.value.filter(
-    (t) => t.address === selectedTokenAddress.value,
-  )[0];
-  selectedToken.value = {
-    l2Address: tokenAddress.address,
-    decimals: tokenAddress.decimals,
-    symbol: tokenAddress.symbol,
+  const updateFee = async () => {
+    retrievingFee.value = true;
+    getFee()
+      .then((fee) => {
+        currentFee.value = fee;
+      })
+      .catch((e) => console.log(e))
+      .finally(() => {
+        retrievingFee.value = false;
+      });
   };
-  try {
-    updateFee();
-    updateBalance();
-  } catch (e) {
-    console.log(e);
-  } finally {
-    retrievingFee.value = false;
-    retrievingBalance.value = false;
-  }
-};
-const loadMainScreen = async () => {
-  await initializeProviderAndSigner();
+  const updateBalance = async () => {
+    retrievingBalance.value = true;
+    getBalance()
+      .then((balance) => {
+        currentBalance.value = balance;
+      })
+      .catch((e) => console.log(e))
+      .finally(() => {
+        retrievingBalance.value = false;
+      });
 
-  if (!provider || !signer) {
-    alert("Follow the tutorial to learn how to connect to Metamask!");
-    return;
-  }
+    getbETHBalance().then((balance) => {
+      currentbETHBalance.value = balance;
+    })
+      .catch((e) => console.log(e))
+      .finally(() => {
+        retrievingBalance.value = false;
+      });
+  };
+  const changeToken = async () => {
+    retrievingFee.value = true;
+    retrievingBalance.value = true;
 
-  await getGreeting()
-    .then((newGreeting) => (greeting.value = newGreeting))
-    .catch((e: unknown) => console.error(e));
+    const tokenAddress = tokens.value.filter(
+      (t) => t.address === selectedTokenAddress.value,
+    )[0];
+    selectedToken.value = {
+      l2Address: tokenAddress.address,
+      decimals: tokenAddress.decimals,
+      symbol: tokenAddress.symbol,
+    };
+    try {
+      updateFee();
+      updateBalance();
+    } catch (e) {
+      console.log(e);
+    } finally {
+      retrievingFee.value = false;
+      retrievingBalance.value = false;
+    }
+  };
+  const loadMainScreen = async () => {
+    await initializeProviderAndSigner();
 
-  mainLoading.value = false;
-};
-const addZkSyncSepolia = async () => {
-  // add zkSync testnet to Metamask
-  await window.ethereum?.request({
-    method: "wallet_addEthereumChain",
-    params: [
-      {
-        chainId: "0x12C",
-        chainName: "zkSync Sepolia testnet",
-        rpcUrls: ["https://sepolia.era.zksync.dev"],
-        blockExplorerUrls: ["https://sepolia.explorer.zksync.io/"],
-        nativeCurrency: {
-          name: "ETH",
-          symbol: "ETH",
-          decimals: 18,
+    if (!provider || !signer) {
+      alert("Follow the tutorial to learn how to connect to Metamask!");
+      return;
+    }
+
+    mainLoading.value = false;
+  };
+  const addZkSyncSepolia = async () => {
+    // add zkSync testnet to Metamask
+    await window.ethereum?.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          chainId: "0x12C",
+          chainName: "zkSync Sepolia testnet",
+          rpcUrls: ["https://sepolia.era.zksync.dev"],
+          blockExplorerUrls: ["https://sepolia.explorer.zksync.io/"],
+          nativeCurrency: {
+            name: "ETH",
+            symbol: "ETH",
+            decimals: 18,
+          },
         },
-      },
-    ],
-  });
-  window.location.reload();
-};
-const connectMetamask = async () => {
-  await window.ethereum
-    ?.request({ method: "eth_requestAccounts" })
-    .catch((e: unknown) => console.error(e));
+      ],
+    });
+    window.location.reload();
+  };
+  const connectMetamask = async () => {
+    await window.ethereum
+      ?.request({ method: "eth_requestAccounts" })
+      .catch((e: unknown) => console.error(e));
 
-  loadMainScreen();
-};
+    loadMainScreen();
+  }
 </script>
 
 <style scoped>
@@ -333,9 +337,11 @@ select {
   padding: 8px 3px;
   margin: 0 5px;
 }
+
 button {
   margin: 0 5px;
 }
+
 .title,
 .main-box,
 .greeting-input,
